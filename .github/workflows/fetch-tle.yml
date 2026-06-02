@@ -1,0 +1,65 @@
+name: Fetch Space-Track TLE Data
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # 毎時間実行
+  workflow_dispatch:     # 手動実行も可能
+
+jobs:
+  fetch-tle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Fetch Space-Track TLE
+        env:
+          SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
+          SPACETRACK_PASSWORD: ${{ secrets.SPACETRACK_PASSWORD }}
+        run: |
+          python3 << 'EOF'
+          import requests
+          import json
+          import os
+          from datetime import datetime
+
+          username = os.environ['SPACETRACK_USERNAME']
+          password = os.environ['SPACETRACK_PASSWORD']
+
+          session = requests.Session()
+          session.auth = (username, password)
+
+          # Space-Track API から最新100件の TLE を取得
+          url = 'https://www.space-track.org/basicspacedata/query/class/tle_latest/orderby/epoch%20desc/limit/100/format/json'
+
+          try:
+              response = session.get(url, timeout=30)
+              response.raise_for_status()
+              data = response.json()
+
+              # JSON ファイルに保存
+              os.makedirs('data', exist_ok=True)
+              with open('data/tle.json', 'w', encoding='utf-8') as f:
+                  json.dump({
+                      'updated_at': datetime.utcnow().isoformat(),
+                      'data': data
+                  }, f, indent=2, ensure_ascii=False)
+
+              print(f'✓ {len(data)} 件の TLE データを取得しました')
+
+          except Exception as e:
+              print(f'✗ エラー: {e}')
+              exit(1)
+          EOF
+
+      - name: Commit and Push
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add data/tle.json
+          git commit -m "Update TLE data: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
+          git push
