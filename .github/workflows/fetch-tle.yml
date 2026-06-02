@@ -36,8 +36,8 @@ jobs:
           session = requests.Session()
           session.auth = (username, password)
 
-          # Space-Track API から最新100件の TLE を取得
-          url = 'https://www.space-track.org/basicspacedata/query/class/tle_latest/orderby/epoch desc/limit/100/format/json'
+          # Space-Track API から衛星カタログを取得（最新順）
+          url = 'https://www.space-track.org/basicspacedata/query/class/satcat/orderby/NORAD_CAT_ID%20desc/limit/100/format/json'
 
           try:
               response = session.get(url, timeout=30)
