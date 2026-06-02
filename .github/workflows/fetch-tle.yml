@@ -16,6 +16,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install dependencies
+        run: pip install requests
+
       - name: Fetch Space-Track TLE
         env:
           SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
