@@ -34,7 +34,10 @@ jobs:
           password = os.environ['SPACETRACK_PASSWORD']
 
           session = requests.Session()
-          session.auth = (username, password)
+
+          # Space-Track にログイン
+          login_url = 'https://www.space-track.org/ajaxauth/login'
+          session.post(login_url, data={'identity': username, 'password': password})
 
           # Space-Track API から衛星カタログを取得（最新順）
           url = 'https://www.space-track.org/basicspacedata/query/class/satcat/orderby/NORAD_CAT_ID%20desc/limit/100/format/json'
