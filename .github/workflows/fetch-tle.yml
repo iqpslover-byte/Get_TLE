@@ -105,12 +105,20 @@ jobs:
                   })
 
               os.makedirs('data', exist_ok=True)
+              updated_at = datetime.utcnow().isoformat() + 'Z'
+
               with open('data/catalog.json', 'w', encoding='utf-8') as f:
                   json.dump({
-                      'updated_at': datetime.utcnow().isoformat() + 'Z',
+                      'updated_at': updated_at,
                       'count': len(data),
                       'data': data
                   }, f, separators=(',', ':'), ensure_ascii=False)
+
+              with open('data/catalog_meta.json', 'w', encoding='utf-8') as f:
+                  json.dump({
+                      'updated_at': updated_at,
+                      'count': len(data)
+                  }, f, separators=(',', ':'))
 
               print(f'✓ {len(data)} 件のカタログデータを保存しました')
 
@@ -123,6 +131,6 @@ jobs:
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/tle.json data/catalog.json
+          git add data/tle.json data/catalog.json data/catalog_meta.json
           git commit -m "Update catalog: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
