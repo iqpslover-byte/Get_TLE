@@ -35,11 +35,9 @@ jobs:
 
           session = requests.Session()
 
-          # Space-Track にログイン
           login_url = 'https://www.space-track.org/ajaxauth/login'
           session.post(login_url, data={'identity': username, 'password': password})
 
-          # Space-Track API から衛星カタログを取得（最新順）
           url = 'https://www.space-track.org/basicspacedata/query/class/satcat/orderby/NORAD_CAT_ID%20desc/limit/100/format/json'
 
           try:
@@ -47,7 +45,6 @@ jobs:
               response.raise_for_status()
               data = response.json()
 
-              # JSON ファイルに保存
               os.makedirs('data', exist_ok=True)
               with open('data/tle.json', 'w', encoding='utf-8') as f:
                   json.dump({
@@ -62,10 +59,70 @@ jobs:
               exit(1)
           EOF
 
+      - name: Fetch CelesTrak Satcat (Full Catalog)
+        run: |
+          python3 << 'EOF'
+          import requests
+          import csv
+          import json
+          import io
+          import os
+          from datetime import datetime
+
+          url = 'https://celestrak.org/pub/satcat.csv'
+
+          def val(row, *keys):
+              for k in keys:
+                  v = row.get(k, '').strip()
+                  if v:
+                      return v
+              return None
+
+          try:
+              response = requests.get(url, timeout=60)
+              response.raise_for_status()
+
+              reader = csv.DictReader(io.StringIO(response.text))
+              data = []
+              for row in reader:
+                  norad = val(row, 'NORAD_CAT_ID', 'OBJECT_NUMBER')
+                  if not norad:
+                      continue
+                  data.append({
+                      'NORAD_CAT_ID': norad,
+                      'OBJECT_NAME':  val(row, 'SATNAME', 'OBJECT_NAME') or '',
+                      'INTLDES':      val(row, 'OBJECT_ID', 'INTLDES') or '',
+                      'OBJECT_TYPE':  val(row, 'OBJECT_TYPE'),
+                      'COUNTRY':      val(row, 'COUNTRY'),
+                      'LAUNCH':       val(row, 'LAUNCH'),
+                      'SITE':         val(row, 'SITE'),
+                      'DECAY':        val(row, 'DECAY'),
+                      'PERIOD':       val(row, 'PERIOD'),
+                      'INCL':         val(row, 'INCLINATION', 'INCL'),
+                      'APOGEE':       val(row, 'APOGEE'),
+                      'PERIGEE':      val(row, 'PERIGEE'),
+                      'RCS':          val(row, 'RCSVALUE', 'RCS'),
+                  })
+
+              os.makedirs('data', exist_ok=True)
+              with open('data/catalog.json', 'w', encoding='utf-8') as f:
+                  json.dump({
+                      'updated_at': datetime.utcnow().isoformat() + 'Z',
+                      'count': len(data),
+                      'data': data
+                  }, f, separators=(',', ':'), ensure_ascii=False)
+
+              print(f'✓ {len(data)} 件のカタログデータを保存しました')
+
+          except Exception as e:
+              print(f'✗ エラー: {e}')
+              exit(1)
+          EOF
+
       - name: Commit and Push
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add data/tle.json
-          git commit -m "Update TLE data: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
+          git add data/tle.json data/catalog.json
+          git commit -m "Update catalog: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
