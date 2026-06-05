@@ -90,18 +90,18 @@ jobs:
                       continue
                   data.append({
                       'NORAD_CAT_ID': norad,
-                      'OBJECT_NAME':  val(row, 'SATNAME', 'OBJECT_NAME') or '',
+                      'OBJECT_NAME':  val(row, 'OBJECT_NAME', 'SATNAME') or '',
                       'INTLDES':      val(row, 'OBJECT_ID', 'INTLDES') or '',
                       'OBJECT_TYPE':  val(row, 'OBJECT_TYPE'),
-                      'COUNTRY':      val(row, 'COUNTRY'),
-                      'LAUNCH':       val(row, 'LAUNCH'),
-                      'SITE':         val(row, 'SITE'),
-                      'DECAY':        val(row, 'DECAY'),
+                      'COUNTRY':      val(row, 'OWNER', 'COUNTRY'),
+                      'LAUNCH':       val(row, 'LAUNCH_DATE', 'LAUNCH'),
+                      'SITE':         val(row, 'LAUNCH_SITE', 'SITE'),
+                      'DECAY':        val(row, 'DECAY_DATE', 'DECAY'),
                       'PERIOD':       val(row, 'PERIOD'),
                       'INCL':         val(row, 'INCLINATION', 'INCL'),
                       'APOGEE':       val(row, 'APOGEE'),
                       'PERIGEE':      val(row, 'PERIGEE'),
-                      'RCS':          val(row, 'RCSVALUE', 'RCS'),
+                      'RCS':          val(row, 'RCS', 'RCSVALUE'),
                   })
 
               os.makedirs('data', exist_ok=True)
