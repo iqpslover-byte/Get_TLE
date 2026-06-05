@@ -1,4 +1,4 @@
-name: Fetch Space-Track TLE Data
+name: Fetch Satellite Data
 
 on:
   schedule:
@@ -6,20 +6,20 @@ on:
   workflow_dispatch:     # 手動実行も可能
 
 jobs:
-  fetch-tle:
+  fetch:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install dependencies
         run: pip install requests
 
-      - name: Fetch Space-Track TLE
+      - name: Fetch Space-Track Satcat
         env:
           SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
           SPACETRACK_PASSWORD: ${{ secrets.SPACETRACK_PASSWORD }}
@@ -34,91 +34,46 @@ jobs:
           password = os.environ['SPACETRACK_PASSWORD']
 
           session = requests.Session()
+          session.post('https://www.space-track.org/ajaxauth/login',
+                       data={'identity': username, 'password': password})
 
-          login_url = 'https://www.space-track.org/ajaxauth/login'
-          session.post(login_url, data={'identity': username, 'password': password})
-
-          url = 'https://www.space-track.org/basicspacedata/query/class/satcat/orderby/NORAD_CAT_ID%20desc/limit/100/format/json'
-
-          try:
-              response = session.get(url, timeout=30)
-              response.raise_for_status()
-              data = response.json()
-
-              os.makedirs('data', exist_ok=True)
-              with open('data/tle.json', 'w', encoding='utf-8') as f:
-                  json.dump({
-                      'updated_at': datetime.utcnow().isoformat(),
-                      'data': data
-                  }, f, indent=2, ensure_ascii=False)
-
-              print(f'✓ {len(data)} 件の TLE データを取得しました')
-
-          except Exception as e:
-              print(f'✗ エラー: {e}')
-              exit(1)
-          EOF
-
-      - name: Fetch CelesTrak Satcat (Full Catalog)
-        run: |
-          python3 << 'EOF'
-          import requests
-          import csv
-          import json
-          import io
-          import os
-          from datetime import datetime
-
-          url = 'https://celestrak.org/pub/satcat.csv'
-
-          def val(row, *keys):
-              for k in keys:
-                  v = row.get(k, '').strip()
-                  if v:
-                      return v
-              return None
+          url = 'https://www.space-track.org/basicspacedata/query/class/satcat/orderby/NORAD_CAT_ID%20desc/format/json'
 
           try:
-              response = requests.get(url, timeout=60)
+              response = session.get(url, timeout=120)
               response.raise_for_status()
+              raw = response.json()
 
-              reader = csv.DictReader(io.StringIO(response.text))
               data = []
-              for row in reader:
-                  norad = val(row, 'NORAD_CAT_ID', 'OBJECT_NUMBER')
-                  if not norad:
+              for row in raw:
+                  if not row.get('NORAD_CAT_ID'):
                       continue
                   data.append({
-                      'NORAD_CAT_ID': norad,
-                      'OBJECT_NAME':  val(row, 'OBJECT_NAME', 'SATNAME') or '',
-                      'INTLDES':      val(row, 'OBJECT_ID', 'INTLDES') or '',
-                      'OBJECT_TYPE':  val(row, 'OBJECT_TYPE'),
-                      'COUNTRY':      val(row, 'OWNER', 'COUNTRY'),
-                      'LAUNCH':       val(row, 'LAUNCH_DATE', 'LAUNCH'),
-                      'SITE':         val(row, 'LAUNCH_SITE', 'SITE'),
-                      'DECAY':        val(row, 'DECAY_DATE', 'DECAY'),
-                      'PERIOD':       val(row, 'PERIOD'),
-                      'INCL':         val(row, 'INCLINATION', 'INCL'),
-                      'APOGEE':       val(row, 'APOGEE'),
-                      'PERIGEE':      val(row, 'PERIGEE'),
-                      'RCS':          val(row, 'RCS', 'RCSVALUE'),
+                      'NORAD_CAT_ID': row.get('NORAD_CAT_ID', ''),
+                      'OBJECT_NAME':  row.get('OBJECT_NAME', row.get('SATNAME', '')),
+                      'INTLDES':      row.get('INTLDES', row.get('OBJECT_ID', '')),
+                      'OBJECT_TYPE':  row.get('OBJECT_TYPE', ''),
+                      'COUNTRY':      row.get('COUNTRY', ''),
+                      'LAUNCH':       row.get('LAUNCH', ''),
+                      'SITE':         row.get('SITE', ''),
+                      'DECAY':        row.get('DECAY', ''),
+                      'PERIOD':       row.get('PERIOD', ''),
+                      'INCL':         row.get('INCLINATION', row.get('INCL', '')),
+                      'APOGEE':       row.get('APOGEE', ''),
+                      'PERIGEE':      row.get('PERIGEE', ''),
+                      'RCS':          row.get('RCSVALUE', row.get('RCS', '')),
                   })
 
               os.makedirs('data', exist_ok=True)
               updated_at = datetime.utcnow().isoformat() + 'Z'
 
-              with open('data/catalog.json', 'w', encoding='utf-8') as f:
-                  json.dump({
-                      'updated_at': updated_at,
-                      'count': len(data),
-                      'data': data
-                  }, f, separators=(',', ':'), ensure_ascii=False)
+              with open('data/satcat.json', 'w', encoding='utf-8') as f:
+                  json.dump({'updated_at': updated_at, 'count': len(data), 'data': data},
+                            f, separators=(',', ':'), ensure_ascii=False)
 
-              with open('data/catalog_meta.json', 'w', encoding='utf-8') as f:
-                  json.dump({
-                      'updated_at': updated_at,
-                      'count': len(data)
-                  }, f, separators=(',', ':'))
+              with open('data/satcat_meta.json', 'w', encoding='utf-8') as f:
+                  json.dump({'updated_at': updated_at, 'count': len(data)},
+                            f, separators=(',', ':'))
 
               print(f'✓ {len(data)} 件のカタログデータを保存しました')
 
@@ -129,8 +84,8 @@ jobs:
 
       - name: Commit and Push
         run: |
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          git add data/tle.json data/catalog.json data/catalog_meta.json
-          git commit -m "Update catalog: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
+          git config --local user.email "iqps.lover@gmail.com"
+          git config --local user.name "iqpslover-byte"
+          git add data/satcat.json data/satcat_meta.json
+          git commit -m "Update satcat: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
