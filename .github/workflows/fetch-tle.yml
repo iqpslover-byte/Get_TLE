@@ -80,12 +80,41 @@ jobs:
           except Exception as e:
               print(f'✗ エラー: {e}')
               exit(1)
+
+          # ── gp クラス（TLE2行付き・最新500件）。satcat と同じセッションを再利用 ──
+          try:
+              gp_url = 'https://www.space-track.org/basicspacedata/query/class/gp/orderby/NORAD_CAT_ID%20desc/limit/500/format/json'
+              gp_res = session.get(gp_url, timeout=120)
+              gp_res.raise_for_status()
+              gp_raw = gp_res.json()
+
+              tle_data = []
+              for row in gp_raw:
+                  if not row.get('NORAD_CAT_ID') or not row.get('TLE_LINE1') or not row.get('TLE_LINE2'):
+                      continue
+                  tle_data.append({
+                      'NORAD_CAT_ID': row.get('NORAD_CAT_ID', ''),
+                      'OBJECT_NAME':  row.get('OBJECT_NAME', ''),
+                      'OBJECT_ID':    row.get('OBJECT_ID', ''),
+                      'EPOCH':        row.get('EPOCH', ''),
+                      'TLE_LINE1':    row.get('TLE_LINE1', ''),
+                      'TLE_LINE2':    row.get('TLE_LINE2', ''),
+                  })
+
+              with open('data/tle_recent.json', 'w', encoding='utf-8') as f:
+                  json.dump({'updated_at': datetime.utcnow().isoformat() + 'Z', 'count': len(tle_data), 'data': tle_data},
+                            f, separators=(',', ':'), ensure_ascii=False)
+
+              print(f'✓ {len(tle_data)} 件のTLEを保存しました（tle_recent.json）')
+
+          except Exception as e:
+              print(f'✗ TLE取得エラー: {e}')
           EOF
 
       - name: Commit and Push
         run: |
           git config --local user.email "iqps.lover@gmail.com"
           git config --local user.name "iqpslover-byte"
-          git add data/satcat.json data/satcat_meta.json
+          git add data/satcat.json data/satcat_meta.json data/tle_recent.json
           git commit -m "Update satcat: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
