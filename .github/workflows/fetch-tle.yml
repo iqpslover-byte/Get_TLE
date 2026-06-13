@@ -83,7 +83,8 @@ jobs:
 
           # ── gp クラス（TLE2行付き・最新500件）。satcat と同じセッションを再利用 ──
           try:
-              gp_url = 'https://www.space-track.org/basicspacedata/query/class/gp/orderby/NORAD_CAT_ID%20desc/limit/500/format/json'
+              # 打ち上げ日が新しい順に200件（最新打ち上げの衛星を確実にカバー）
+              gp_url = 'https://www.space-track.org/basicspacedata/query/class/gp/orderby/LAUNCH_DATE%20desc/limit/200/format/json'
               gp_res = session.get(gp_url, timeout=120)
               gp_res.raise_for_status()
               gp_raw = gp_res.json()
