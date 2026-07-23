@@ -1,0 +1,69 @@
+name: HistProbe (diagnostic)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe gp_history
+        env:
+          SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
+          SPACETRACK_PASSWORD: ${{ secrets.SPACETRACK_PASSWORD }}
+        run: |
+          pip install requests >/dev/null
+          python3 << 'EOF'
+          import requests, os, statistics
+          from datetime import datetime
+
+          u=os.environ['SPACETRACK_USERNAME']; p=os.environ['SPACETRACK_PASSWORD']
+          s=requests.Session()
+          r=s.post('https://www.space-track.org/ajaxauth/login',
+                   data={'identity':u,'password':p}, timeout=60)
+          print('login status', r.status_code)
+          BASE='https://www.space-track.org/basicspacedata/query'
+
+          def q(path):
+              url=BASE+path
+              rr=s.get(url, timeout=180)
+              rr.raise_for_status()
+              return rr.json()
+
+          def epoch(x): return x.get('EPOCH','')
+
+          # --- 1) 最新の打上げ機を1つ拾う（gp currentから） ---
+          recent=q('/class/gp/orderby/LAUNCH_DATE%20desc/limit/1/format/json')[0]
+          rid=recent['NORAD_CAT_ID']; rld=recent.get('LAUNCH_DATE',''); rname=recent.get('OBJECT_NAME','')
+          print(f'\n[recent] NORAD={rid} name={rname} LAUNCH_DATE={rld}')
+
+          # --- 2) その機の gp_history 全件 ---
+          h=q(f'/class/gp_history/NORAD_CAT_ID/{rid}/orderby/EPOCH%20asc/format/json')
+          print(f'[recent] gp_history count={len(h)}')
+          if h:
+              eps=[e for e in (epoch(x) for x in h) if e]
+              print(f'[recent] epoch first={eps[0]} last={eps[-1]}')
+              print(f'[recent] LAUNCH_DATE={rld} -> reaches launch? first_epoch<=launch+2d の確認材料')
+              # 元期間隔（時間・中央値）
+              def toS(e):
+                  try: return datetime.fromisoformat(e.replace('Z','')).timestamp()
+                  except: return None
+              ts=[toS(e) for e in eps]; ts=[t for t in ts if t]
+              if len(ts)>1:
+                  dl=[(ts[i+1]-ts[i])/3600 for i in range(len(ts)-1)]
+                  print(f'[recent] 元期間隔[h] median={statistics.median(dl):.2f} min={min(dl):.2f} max={max(dl):.2f}')
+              x0=h[0]
+              l1=x0.get('TLE_LINE1',''); l2=x0.get('TLE_LINE2','')
+              print(f'[recent] TLE_LINE1 present={bool(l1)} len={len(l1)}')
+              print(f'[recent] TLE_LINE2 present={bool(l2)} len={len(l2)}')
+              print(f'[recent] sample L1: {l1}')
+              print(f'[recent] sample L2: {l2}')
+
+          # --- 3) ISS(25544)で gp_history の深さ境界 と 旧tleクラスの深さ ---
+          for cls in ('gp_history','tle'):
+              a=q(f'/class/{cls}/NORAD_CAT_ID/25544/orderby/EPOCH%20asc/limit/1/format/json')
+              b=q(f'/class/{cls}/NORAD_CAT_ID/25544/orderby/EPOCH%20desc/limit/1/format/json')
+              ea=epoch(a[0]) if a else 'NONE'; eb=epoch(b[0]) if b else 'NONE'
+              print(f'[ISS 25544] class={cls} earliest={ea} latest={eb}')
+          print('\nDONE')
+          EOF
