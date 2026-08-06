@@ -81,10 +81,12 @@ jobs:
               print(f'✗ エラー: {e}')
               exit(1)
 
-          # ── gp クラス（TLE2行付き・最新500件）。satcat と同じセッションを再利用 ──
+          # ── gp クラス（TLE2行付き・登録が新しい300件）。satcat と同じセッションを再利用 ──
           try:
-              # 打ち上げ日が新しい順に200件（最新打ち上げの衛星を確実にカバー）
-              gp_url = 'https://www.space-track.org/basicspacedata/query/class/gp/orderby/LAUNCH_DATE%20desc/limit/200/format/json'
+              # カタログ登録が新しい順に300件。
+              # ★LAUNCH_DATE順にすると『打上げ日が空欄』の機(直近300機中96機)が永久に取れない。
+              # ★20万番台は解析用の仮オブジェクトで上位を独占するため除外する。
+              gp_url = 'https://www.space-track.org/basicspacedata/query/class/gp/NORAD_CAT_ID/%3C200000/orderby/NORAD_CAT_ID%20desc/limit/300/format/json'
               gp_res = session.get(gp_url, timeout=120)
               gp_res.raise_for_status()
               gp_raw = gp_res.json()
