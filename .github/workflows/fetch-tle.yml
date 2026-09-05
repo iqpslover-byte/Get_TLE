@@ -104,11 +104,49 @@ jobs:
                       'TLE_LINE2':    row.get('TLE_LINE2', ''),
                   })
 
+              # ── 追跡している機を番号指定で追加する（★桁数と新旧に関係なく必ず配信へ）──
+              # 上の300件は「番号順に上から」なので、番号が古くなると窓から落ちる。
+              # 5桁の頃は落ちても個人運営のTLE APIが答えたが、6桁はそのAPIが持っておらず、
+              # CelesTrak は利用者の回線から届かない＝落ちた瞬間に取得先がゼロになる。
+              try:
+                  with open('data/tracked.json', encoding='utf-8') as tf:
+                      tracked = [str(int(x)) for x in json.load(tf).get('ids', [])]
+              except Exception as e:
+                  tracked = []
+                  print(f'! tracked.json を読めませんでした: {e}')
+
+              have = {str(r['NORAD_CAT_ID']) for r in tle_data}
+              missing = [n for n in tracked if n not in have]
+              if missing:
+                  try:
+                      add_url = ('https://www.space-track.org/basicspacedata/query/class/gp/'
+                                 'NORAD_CAT_ID/' + ','.join(missing) + '/format/json')
+                      add_res = session.get(add_url, timeout=120)
+                      add_res.raise_for_status()
+                      n_add = 0
+                      for row in add_res.json():
+                          if not row.get('NORAD_CAT_ID') or not row.get('TLE_LINE1') or not row.get('TLE_LINE2'):
+                              continue
+                          tle_data.append({
+                              'NORAD_CAT_ID': row.get('NORAD_CAT_ID', ''),
+                              'OBJECT_NAME':  row.get('OBJECT_NAME', ''),
+                              'OBJECT_ID':    row.get('OBJECT_ID', ''),
+                              'EPOCH':        row.get('EPOCH', ''),
+                              'TLE_LINE1':    row.get('TLE_LINE1', ''),
+                              'TLE_LINE2':    row.get('TLE_LINE2', ''),
+                          })
+                          n_add += 1
+                      print(f'✓ 追跡機を {n_add} 件追加しました（不足 {len(missing)} 件）')
+                  except Exception as e:
+                      print(f'✗ 追跡機の取得エラー: {e}')
+              else:
+                  print('✓ 追跡機はすべて新着300件に含まれています')
+
               with open('data/tle_recent.json', 'w', encoding='utf-8') as f:
                   json.dump({'updated_at': datetime.utcnow().isoformat() + 'Z', 'count': len(tle_data), 'data': tle_data},
                             f, separators=(',', ':'), ensure_ascii=False)
 
-              print(f'✓ {len(tle_data)} 件のTLEを保存しました（tle_recent.json）')
+              print(f'✓ {len(tle_data)} 件のTLEを保存しました（tle_recent.json・新着300件＋追跡機）')
 
           except Exception as e:
               print(f'✗ TLE取得エラー: {e}')
