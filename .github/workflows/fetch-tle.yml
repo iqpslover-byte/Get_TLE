@@ -152,10 +152,17 @@ jobs:
               print(f'✗ TLE取得エラー: {e}')
           EOF
 
+      # 宇宙天気（日ごとの Ap・F10.7）を GFZ から取る。OP's LAB Maps の軌道履歴グラフ下段用。
+      # 失敗しても TLE の配信は止めない（前回のファイルがそのまま残る）
+      - name: Fetch space weather (GFZ)
+        continue-on-error: true
+        run: python3 scripts/fetch_spaceweather.py
+
       - name: Commit and Push
         run: |
           git config --local user.email "iqps.lover@gmail.com"
           git config --local user.name "iqpslover-byte"
           git add data/satcat.json data/satcat_meta.json data/tle_recent.json
+          git add data/spaceweather.csv 2>/dev/null || true
           git commit -m "Update satcat: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
