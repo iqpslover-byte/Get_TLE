@@ -158,11 +158,21 @@ jobs:
         continue-on-error: true
         run: python3 scripts/fetch_spaceweather.py
 
+      # 再突入予測（Space-Track の TIP）。OP's LAB Maps の「再突入予測」レイヤー用。
+      # 失敗しても TLE の配信は止めない（前回のファイルがそのまま残る）
+      - name: Fetch reentry predictions (TIP)
+        continue-on-error: true
+        env:
+          SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
+          SPACETRACK_PASSWORD: ${{ secrets.SPACETRACK_PASSWORD }}
+        run: python3 scripts/fetch_tip.py
+
       - name: Commit and Push
         run: |
           git config --local user.email "iqps.lover@gmail.com"
           git config --local user.name "iqpslover-byte"
           git add data/satcat.json data/satcat_meta.json data/tle_recent.json
           git add data/spaceweather.csv 2>/dev/null || true
+          git add data/tip.json 2>/dev/null || true
           git commit -m "Update satcat: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
