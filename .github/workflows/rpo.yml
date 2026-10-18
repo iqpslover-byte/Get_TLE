@@ -1,6 +1,6 @@
 name: Detect RPO (killer satellites)
 
-# キラー衛星（接近運用）の検知。OP's LAB Maps の知らせ用に data/rpo.json を出す（中身は scripts/rpo_detect.py）。
+# キラー衛星（近接運用）の検知。OP's LAB Maps の知らせ用に data/rpo.json を出す（中身は scripts/rpo_detect.py）。
 # 全カタログの問い合わせは Space-Track の目安が1時間に1回まで＝6時間ごと。
 # 毎時の fetch-tle.yml（0分）と push がぶつからないよう30分にずらす。
 on:
