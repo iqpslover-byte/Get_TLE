@@ -32,6 +32,7 @@ DWELL_KM, DWELL_H, DWELL_DAYS, STEP = 50.0, 12.0, 3, 30
 POOL_DALT = 5.0      # 控えを持つ候補＝平均高度の差がこれ未満の組（km）
 DALT, SEP, CLOSE, MAN, MAN_DAYS = 1.0, 1000.0, 10.0, 20.0, 14
 KEEP_TLE_DAYS = 3    # 1日前の状態を出すのに要る長さ＋余裕
+SINCE_DAYS = 30      # 開始の日時をさかのぼる上限（これより前から続いていれば「30日以上前から」）
 NEW_DAYS = 30        # 打上げからこの日数以内の機は外す（分離直後の機どうしが寄って見えるだけ）
 # ステーションと結合・ドッキングする機（名前の頭）。結合中は張り付いて当然なので外す
 STN = ('ISS', 'CSS', 'TIANGONG', 'SZ-', 'TIANZHOU', 'PROGRESS', 'SOYUZ', 'DRAGON', 'CYGNUS', 'HTV',
@@ -241,6 +242,55 @@ def notify(new, now):
         f.write('\n'.join(L) + '\n')
 
 
+# ── 開始の日時（その組が ① か ② の条件に入り始めた時） ──
+def dwell_at(A, B, t):
+    """その時点で最新の TLE で ① を判定し直す（本番より粗い60秒刻み）"""
+    if not A or not B:
+        return False
+    ts = [t + timedelta(seconds=x) for x in range(0, DWELL_DAYS * 86400, 60)]
+    ra, _ = rv(Satrec.twoline2rv(A[1], A[2]), ts)
+    rb, _ = rv(Satrec.twoline2rv(B[1], B[2]), ts)
+    return float((np.linalg.norm(ra - rb, axis=1) < DWELL_KM).sum()) * 60 / 3600 >= DWELL_H
+
+
+def since_of(pairs, st, now):
+    """pairs＝[(番号A, 番号B)]。6時間ずつさかのぼり、近くに居続けていた最初の時刻を返す
+    （その時点で最新だった TLE で判定し直す）。{(A, B): (時刻, 上限で打ち切ったか)}
+    「近くに居る」＝① か、同じ面（PLANE）・高度差 POOL_DALT 以内・1周平均の距離 SEP 以内。
+    ★② そのもの（高度差1km）で続きを見ると、最後の詰めの噴射で高度差が数km開いた間が抜け落ちる
+      （Cosmos 2612：10/15 18Z〜10/16 12Z の24時間＝高度差2.4kmで距離180→11km）。"""
+    ids = sorted({n for p in pairs for n in p}, key=int)
+    frm = (now - timedelta(days=SINCE_DAYS + MAN_DAYS + 1)).strftime('%Y-%m-%d')
+    rows = st.q('/class/gp_history/NORAD_CAT_ID/' + ','.join(ids) + '/EPOCH/%3E' + frm +
+                '/predicates/NORAD_CAT_ID,EPOCH,SEMIMAJOR_AXIS,TLE_LINE1,TLE_LINE2/orderby/EPOCH%20asc/format/json')
+    rec = {k: {'tles': [], 'man': []} for k in ids}
+    got = {}
+    for x in rows:
+        got.setdefault(x['NORAD_CAT_ID'], set()).add(row_of(x))
+    for k in ids:
+        for row in sorted(got.get(k, [])):   # 噴射を拾いながら全部並べる（古いものは捨てない）
+            r = rec[k]
+            if r['tles'] and jump(r['tles'][-1], row) > MAN:
+                r['man'].append(row[0])
+            r['tles'].append(list(row))
+    out = {}
+    for a, b in pairs:
+        t, ok = now.replace(minute=0, second=0), None
+        for _ in range(SINCE_DAYS * 4 + 1):
+            A, B = latest(rec[a], t), latest(rec[b], t)
+            p = pstate(A, B, t)
+            near = p and p[0] <= PLANE and p[1] <= POOL_DALT and p[2] <= SEP
+            if not (near or dwell_at(A, B, t)):
+                break
+            ok = t
+            t -= timedelta(hours=6)
+        else:
+            out[(a, b)] = (iso(ok), True)
+            continue
+        out[(a, b)] = (iso(ok or now), False)
+    return out
+
+
 def main():
     now = datetime.now(timezone.utc).replace(microsecond=0)
     st = ST()
@@ -314,14 +364,29 @@ def run(G, now, st=None):
             ab = tuple(sorted((o['a'], o['b']), key=int))
             key = kind + ':' + '-'.join(ab)
             first = seen.get(key, {}).get('first', iso(now))
-            seen[key] = {'first': first, 'last': iso(now)}
+            seen[key] = {**seen.get(key, {}), 'first': first, 'last': iso(now)}
             a, b = o.pop('a'), o.pop('b')
-            it = {'kind': kind, 'first': first, 'a': info(by[a]), 'b': info(by[b]), **o}
+            it = {'kind': kind, 'first': first, 'a': info(by[a]), 'b': info(by[b]), **o, '_key': key, '_ab': ab}
             if ab in KNOWN:
                 it['known'] = KNOWN[ab]
             elif first == iso(now):
                 new.append(it)
             items.append(it)
+    # 開始の日時は、まだ出していない組だけ履歴から求める（既知の組は求めない＝ずっと続いている）
+    todo = [it for it in items if 'known' not in it and 'since' not in seen[it['_key']]]
+    if todo and st:
+        try:
+            got = since_of(list({it['_ab'] for it in todo}), st, now)
+            for it in todo:
+                seen[it['_key']]['since'], seen[it['_key']]['sinceCapped'] = got[it['_ab']]
+        except Exception as e:
+            print(f'! 開始の日時を出せませんでした: {e}')
+    for it in items:
+        k = it.pop('_key'); it.pop('_ab')
+        if 'since' in seen[k]:
+            it['since'] = seen[k]['since']
+            if seen[k].get('sinceCapped'):
+                it['sinceCapped'] = True
     cut = iso(now - timedelta(days=60))
     state['seen'] = {k: v for k, v in seen.items() if v['last'] >= cut}
     items.sort(key=lambda o: ('known' in o, o['kind'] != 'dwell', o.get('minKm', o.get('sepKm', 0))))
