@@ -216,6 +216,11 @@ def info(x):
             'epoch': x['EPOCH'][:19] + 'Z', 'tle1': x['TLE_LINE1'], 'tle2': x['TLE_LINE2']}
 
 
+def jst(t):
+    """'2026-10-16T14:14:11Z' → '10-16 23:14'（JST）。噴射の時刻は見つけた TLE の元期＝実際はその前の TLE との間のどこか"""
+    return (utc(t) + timedelta(hours=9)).strftime('%m-%d %H:%M')
+
+
 def notify(new, now):
     """新しく鳴った組の知らせ文。1行目が Issue の題名"""
     kinds = {'dwell': '① 警報（張り付き）', 'approach': '② 注意（前触れ）'}
@@ -226,12 +231,12 @@ def notify(new, now):
             L.append(f"- この先3日のうち {DWELL_KM:.0f}km 以内に {o['hours']} 時間・最小 {o['minKm']}km・今 {o['nowKm']}km")
         else:
             L.append(f"- 1周平均の距離 {o['sepKm']}km・1日で {o['closeKmPerDay']}km 縮む・面の差 {o['planeDeg']}°・高度差 {o['dAltKm']}km")
-            for side in ('A', 'B'):
-                if o['man' + side]:
-                    L.append(f"- 噴射（{o[side.lower()]['name']}）：" + '、'.join(o['man' + side]))
+        for side in ('A', 'B'):
+            if o.get('man' + side):
+                L.append(f"- 噴射 {o[side.lower()]['name']}　" + '、'.join(jst(m) for m in o['man' + side]) + ' JST')
         L.append(f"- 番号 {o['a']['id']} / {o['b']['id']}・平均高度 {o['a']['altKm']}km")
         L.append('')
-    L.append(f'判定 {iso(now)}（時刻は TLE の元期で数えている＝実際の公開は数時間遅れる）')
+    L.append(f"判定 {(now + timedelta(hours=9)).strftime('%Y-%m-%d %H:%M')} JST")
     with open(NEW_MD, 'w', encoding='utf-8') as f:
         f.write('\n'.join(L) + '\n')
 
@@ -272,7 +277,8 @@ def run(G, now, st=None):
     except Exception:
         state = {'sats': {}, 'seen': {}}
     sats = state['sats']
-    need = sorted({n for p in pool for n in p}, key=int)
+    # ① の組の2機も控える（噴射の時刻を載せるため）
+    need = sorted({n for p in pool for n in p} | {n for o in alerts for n in (o['a'], o['b'])}, key=int)
     fresh = [n for n in need if n not in sats]
     print(f'② 候補 {len(pool)} 組・{len(need)} 機（新しく控える {len(fresh)} 機）')
     if fresh and st:
@@ -295,6 +301,8 @@ def run(G, now, st=None):
         if k not in by or k not in need:   # 候補から外れた機は捨てる（戻ってきたら取り直す）
             del sats[k]
 
+    for o in alerts:
+        o['manA'], o['manB'] = list(sats[o['a']]['man']), list(sats[o['b']]['man'])
     warns = approach(pool, sats, now)
     print(f'② 注意 {len(warns)} 組')
 
