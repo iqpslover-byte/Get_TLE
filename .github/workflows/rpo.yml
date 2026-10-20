@@ -41,6 +41,22 @@ jobs:
           git pull --rebase origin main
           git push origin main
 
+      # 軌道面が近い衛星（アプリ）用の _planes.json は、履歴を持たない planes ブランチへ毎回上書きで置く。
+      # main に積むと約4MB×1日4回ずつ履歴が膨らむため。アプリは raw.githubusercontent.com/.../planes/planes.json を読む
+      - name: Publish planes
+        if: ${{ hashFiles('_planes.json') != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/planes && cp _planes.json /tmp/planes/planes.json
+          cd /tmp/planes
+          git init -q -b planes
+          git config user.email "iqps.lover@gmail.com"
+          git config user.name "iqpslover-byte"
+          git add planes.json
+          git commit -q -m "Update planes: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" planes
+
       # 新しい組が鳴った時だけ Issue を立てる（Get_NOTAM と同じ方式・知らせるのが目的なので立てたらすぐ閉じる）。
       # ★自分で gh から立てた Issue は自分に通知されない＝必ず Actions から立てる。
       - name: Notify new pairs

@@ -40,8 +40,11 @@ STN = ('ISS', 'CSS', 'TIANGONG', 'SZ-', 'TIANZHOU', 'PROGRESS', 'SOYUZ', 'DRAGON
 # いつも並んで飛んでいると分かっている組。一覧の下へ回し、知らせは鳴らさない（消さないのは、崩れた時に気づけるように）
 KNOWN = {('31698', '36605'): 'TerraSAR-X と TanDEM-X の編隊飛行'}
 NEW_MD = '_new_rpo.md'   # 新しい組が鳴った時だけ書く＝ワークフローが Issue を立てる（コミットしない）
+# 軌道面が近い衛星（アプリ v3.63）用に、衛星（PAYLOAD）全機の軌道面と TLE を書き出す。約4MB を6時間ごとに main へ積むと
+# 履歴が膨らむので、ワークフローが履歴を持たない planes ブランチへ上書きで置く（main にはコミットしない）
+PLANES = '_planes.json'
 FIELDS ='NORAD_CAT_ID,OBJECT_NAME,OBJECT_ID,OBJECT_TYPE,COUNTRY_CODE,LAUNCH_DATE,EPOCH,SEMIMAJOR_AXIS,' \
-         'PERIAPSIS,APOAPSIS,TLE_LINE1,TLE_LINE2'
+         'PERIAPSIS,APOAPSIS,TLE_LINE1,TLE_LINE2,INCLINATION,RA_OF_ASC_NODE,ECCENTRICITY'
 
 
 def utc(s):
@@ -297,7 +300,25 @@ def main():
     G = st.q('/class/gp/decay_date/null-val/epoch/%3Enow-30/OBJECT_TYPE/PAYLOAD,UNKNOWN'
              '/predicates/' + FIELDS + '/orderby/norad_cat_id/format/json')
     print(f'全カタログ {len(G)} 件')
+    write_planes(G, now)
     run(G, now, st)
+
+
+def write_planes(G, now):
+    """1行 = [番号, 名前, 軌道傾斜角°, RAAN°, 平均高度km, 離心率, 元期(UNIX秒), TLE1, TLE2]"""
+    out = []
+    for x in G:
+        if x.get('OBJECT_TYPE') != 'PAYLOAD' or not x.get('TLE_LINE1') or not x.get('TLE_LINE2'):
+            continue
+        try:
+            out.append([int(x['NORAD_CAT_ID']), x['OBJECT_NAME'] or '', round(float(x['INCLINATION']), 4),
+                        round(float(x['RA_OF_ASC_NODE']), 4), round(float(x['SEMIMAJOR_AXIS']) - RE, 1),
+                        round(float(x['ECCENTRICITY']), 6), int(utc(x['EPOCH']).timestamp()), x['TLE_LINE1'], x['TLE_LINE2']])
+        except Exception:
+            pass
+    with open(PLANES, 'w', encoding='utf-8') as f:
+        json.dump({'updated_at': int(now.timestamp()), 'sats': out}, f, separators=(',', ':'), ensure_ascii=False)
+    print(f'✓ {PLANES} {len(out)} 機・{os.path.getsize(PLANES) // 1024} KB')
 
 
 def run(G, now, st=None):
