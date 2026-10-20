@@ -167,6 +167,14 @@ jobs:
           SPACETRACK_PASSWORD: ${{ secrets.SPACETRACK_PASSWORD }}
         run: python3 scripts/fetch_tip.py
 
+      # 過去1年の再突入（TIP の確定報告）。OP's LAB Maps の再突入予測の表用。1日1回だけ取り直す（スクリプト側で判定）
+      - name: Fetch past reentries (TIP final reports)
+        continue-on-error: true
+        env:
+          SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
+          SPACETRACK_PASSWORD: ${{ secrets.SPACETRACK_PASSWORD }}
+        run: python3 scripts/fetch_tip_hist.py
+
       - name: Commit and Push
         run: |
           git config --local user.email "iqps.lover@gmail.com"
@@ -174,5 +182,6 @@ jobs:
           git add data/satcat.json data/satcat_meta.json data/tle_recent.json
           git add data/spaceweather.csv 2>/dev/null || true
           git add data/tip.json 2>/dev/null || true
+          git add data/tip_hist.json 2>/dev/null || true
           git commit -m "Update satcat: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
