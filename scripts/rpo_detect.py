@@ -442,8 +442,8 @@ def hist_add(H, it, t):
     for k in ('since', 'known'):
         if it.get(k):
             h[k] = it[k]
-    for k in ('a', 'b'):   # 名前は最新へ（TBA などから付け直されることがある）
-        h[k].update({x: it[k][x] for x in ('name', 'intl', 'country') if x in it[k]})
+    for k in ('a', 'b'):   # 名前と TLE は最新へ（TBA などから付け直される・鳴り止んだ機の大半は tle_recent.json に居ない＝アプリが地図に出す時に使う）
+        h[k].update({x: it[k][x] for x in ('name', 'intl', 'country', 'epoch', 'tle1', 'tle2') if x in it[k]})
 
 
 def hist_update(items, now):
