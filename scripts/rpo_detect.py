@@ -39,6 +39,7 @@ STN = ('ISS', 'CSS', 'TIANGONG', 'SZ-', 'TIANZHOU', 'PROGRESS', 'SOYUZ', 'DRAGON
        'POISK', 'STARLINER')
 # いつも並んで飛んでいると分かっている組。一覧の下へ回し、知らせは鳴らさない（消さないのは、崩れた時に気づけるように）
 KNOWN = {('31698', '36605'): 'TerraSAR-X と TanDEM-X の編隊飛行'}
+HIST = 'data/rpo_hist.json'   # 鳴った組の履歴（消さずに貯める・アプリの ARCHIVE）
 NEW_MD = '_new_rpo.md'   # 新しい組が鳴った時だけ書く＝ワークフローが Issue を立てる（コミットしない）
 # 軌道面が近い衛星（アプリ v3.63）用に、衛星（PAYLOAD）全機の軌道面と TLE を書き出す。約4MB を6時間ごとに main へ積むと
 # 履歴が膨らむので、ワークフローが履歴を持たない planes ブランチへ上書きで置く（main にはコミットしない）
@@ -402,6 +403,7 @@ def run(G, now, st=None):
                 seen[it['_key']]['since'], seen[it['_key']]['sinceCapped'] = got[it['_ab']]
         except Exception as e:
             print(f'! 開始の日時を出せませんでした: {e}')
+    hist_update(items, now)
     for it in items:
         k = it.pop('_key'); it.pop('_ab')
         if 'since' in seen[k]:
@@ -422,6 +424,43 @@ def run(G, now, st=None):
     with open(STATE, 'w', encoding='utf-8') as f:
         json.dump(state, f, separators=(',', ':'))
     print(f'✓ {OUT} {len(items)} 件・{STATE} {os.path.getsize(STATE) // 1024} KB')
+
+
+def hist_add(H, it, t):
+    """1回の検知の1組を履歴へ。H＝{key: 記録}・t＝その回の時刻(ISO)"""
+    key = it['_key']
+    d = it.get('minKm', it.get('sepKm'))
+    h = H.get(key)
+    if not h:
+        h = H[key] = {'key': key, 'kind': it['kind'], 'first': it.get('first', t), 'last': t, 'minKm': d,
+                      'a': {k: it['a'][k] for k in ('id', 'name', 'intl', 'country') if k in it['a']},
+                      'b': {k: it['b'][k] for k in ('id', 'name', 'intl', 'country') if k in it['b']}}
+    h['last'] = max(h['last'], t)
+    h['first'] = min(h['first'], it.get('first', t))
+    if d is not None and (h.get('minKm') is None or d < h['minKm']):
+        h['minKm'] = d
+    for k in ('since', 'known'):
+        if it.get(k):
+            h[k] = it[k]
+    for k in ('a', 'b'):   # 名前は最新へ（TBA などから付け直されることがある）
+        h[k].update({x: it[k][x] for x in ('name', 'intl', 'country') if x in it[k]})
+
+
+def hist_update(items, now):
+    """鳴った組の履歴 data/rpo_hist.json を更新する。いま鳴っている組は active"""
+    try:
+        H = {h['key']: h for h in json.load(open(HIST, encoding='utf-8'))['items']}
+    except Exception:
+        H = {}
+    t = iso(now)
+    for it in items:
+        hist_add(H, it, t)
+    keys = {it['_key'] for it in items}
+    for h in H.values():
+        h['active'] = h['key'] in keys
+    out = sorted(H.values(), key=lambda h: h['last'], reverse=True)
+    with open(HIST, 'w', encoding='utf-8') as f:
+        json.dump({'updated_at': t, 'count': len(out), 'items': out}, f, separators=(',', ':'), ensure_ascii=False)
 
 
 if __name__ == '__main__':

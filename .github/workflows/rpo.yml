@@ -36,7 +36,7 @@ jobs:
         run: |
           git config --local user.email "iqps.lover@gmail.com"
           git config --local user.name "iqpslover-byte"
-          git add data/rpo.json data/rpo_state.json
+          git add data/rpo.json data/rpo_state.json data/rpo_hist.json
           git commit -m "Update rpo: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || exit 0
           git pull --rebase origin main
           git push origin main
