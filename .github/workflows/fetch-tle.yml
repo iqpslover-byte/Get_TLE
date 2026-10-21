@@ -5,6 +5,10 @@ on:
     - cron: '0 * * * *'  # 毎時間実行
   workflow_dispatch:     # 手動実行も可能
 
+permissions:
+  contents: write
+  issues: write        # 登録衛星を読めなかった時に Issue で知らせる（GitHub がメールを送る）
+
 jobs:
   fetch:
     runs-on: ubuntu-latest
@@ -23,6 +27,7 @@ jobs:
         env:
           SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
           SPACETRACK_PASSWORD: ${{ secrets.SPACETRACK_PASSWORD }}
+          OPS_SETTINGS_TOKEN: ${{ secrets.OPS_SETTINGS_TOKEN }}   # OP's LAB Maps（非公開）の登録衛星を読む読み取り専用の鍵
         run: |
           python3 << 'EOF'
           import requests
@@ -108,12 +113,49 @@ jobs:
               # 上の300件は「番号順に上から」なので、番号が古くなると窓から落ちる。
               # 5桁の頃は落ちても個人運営のTLE APIが答えたが、6桁はそのAPIが持っておらず、
               # CelesTrak は利用者の回線から届かない＝落ちた瞬間に取得先がゼロになる。
-              try:
-                  with open('data/tracked.json', encoding='utf-8') as tf:
-                      tracked = [str(int(x)) for x in json.load(tf).get('ids', [])]
-              except Exception as e:
-                  tracked = []
-                  print(f'! tracked.json を読めませんでした: {e}')
+              # ★追跡する機＝OP's LAB Maps に登録している衛星（2026-10-21）。手で tracked.json に書き足す作りでは
+              #   STRIX-10 を書き忘れて TLE が取れなかった。読めた時は tracked.json をその内容で書き直す（削除した機も外れる）。
+              #   読めなかった時は前回の tracked.json で続け、_tracked_err.md を書く＝下の手順が Issue で知らせる。
+              tracked = []
+              reg_err = None
+              tok = os.environ.get('OPS_SETTINGS_TOKEN', '')
+              if tok:
+                  try:
+                      rr = requests.get('https://api.github.com/repos/iqpslover-byte/OPs_LAB_Maps/contents/data/app_settings.json',
+                                        headers={'Authorization': 'Bearer ' + tok, 'Accept': 'application/vnd.github.raw'}, timeout=60)
+                      rr.raise_for_status()
+                      sv = rr.json().get('satSatellites')
+                      sv = sv.get('v', sv) if isinstance(sv, dict) else sv
+                      arr = json.loads(sv) if isinstance(sv, str) else sv
+                      names = {}
+                      for x in arr:
+                          n = str(int(x['num'])); tracked.append(n); names[n] = str(x.get('name', '')).split('\n')[0]
+                      if not tracked:
+                          raise ValueError('登録衛星が0機')
+                      with open('data/tracked.json', 'w', encoding='utf-8') as tf:
+                          json.dump({'note': "OP's LAB Maps に登録している衛星（毎時、OP's LAB Maps の data/app_settings.json から書き直す・手で編集しない）。"
+                                             "tle_recent.json の新着300件から外れても必ず配信に含める。",
+                                     'count': len(tracked), 'ids': [int(n) for n in tracked], 'names': names},
+                                    tf, ensure_ascii=False, indent=2)
+                      print(f'登録衛星 {len(tracked)} 機（OP\'s LAB Maps の設定から）')
+                  except Exception as e:
+                      tracked = []
+                      reg_err = f'{e}'
+              else:
+                  reg_err = 'シークレット OPS_SETTINGS_TOKEN が未設定'
+              if not tracked:
+                  try:
+                      with open('data/tracked.json', encoding='utf-8') as tf:
+                          tracked = [str(int(x)) for x in json.load(tf).get('ids', [])]
+                  except Exception as e:
+                      tracked = []
+                      print(f'! tracked.json を読めませんでした: {e}')
+              if reg_err and tok:   # 鍵が未設定の間は知らせない（前回の tracked.json で静かに続ける）
+                  print(f'! 登録衛星を読めませんでした（前回の tracked.json で続ける）: {reg_err}')
+                  with open('_tracked_err.md', 'w', encoding='utf-8') as ef:
+                      ef.write("TLE の配信：OP's LAB Maps の登録衛星を読めませんでした\n"
+                               f"理由：{reg_err}\n\n前回の tracked.json（{len(tracked)} 機）で取得を続けています。"
+                               "読み取り専用の鍵（シークレット OPS_SETTINGS_TOKEN）の期限切れ・取り消しを確かめてください。\n")
 
               have = {str(r['NORAD_CAT_ID']) for r in tle_data}
               missing = [n for n in tracked if n not in have]
@@ -179,9 +221,25 @@ jobs:
         run: |
           git config --local user.email "iqps.lover@gmail.com"
           git config --local user.name "iqpslover-byte"
-          git add data/satcat.json data/satcat_meta.json data/tle_recent.json
+          git add data/satcat.json data/satcat_meta.json data/tle_recent.json data/tracked.json
           git add data/spaceweather.csv 2>/dev/null || true
           git add data/tip.json 2>/dev/null || true
           git add data/tip_hist.json 2>/dev/null || true
           git commit -m "Update satcat: $(date -u +'%Y-%m-%d %H:%M:%S UTC')" || echo "No changes to commit"
           git push origin main
+
+      # 登録衛星を読めなかった時だけ Issue で知らせる（キラー衛星の知らせと同じ方式）。開いたままの知らせがある間は立てない＝毎時の重複を防ぐ。
+      # 直したらその Issue を閉じる＝次にまた読めなくなった時に知らせる
+      - name: Notify tracked list error
+        if: ${{ hashFiles('_tracked_err.md') != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create tracked --color D93F0B --description "TLE の配信：登録衛星を読めない" --force
+          if [ -z "$(gh issue list --label tracked --state open --json number -q '.[].number')" ]; then
+            title=$(head -1 _tracked_err.md)
+            tail -n +2 _tracked_err.md > body.md
+            echo "" >> body.md
+            echo "@${{ github.repository_owner }}" >> body.md
+            gh issue create --title "$title" --body-file body.md --label tracked
+          fi
