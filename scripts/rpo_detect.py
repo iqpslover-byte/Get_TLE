@@ -7,6 +7,8 @@
 # ・噴射を見るため、候補の機の TLE を data/rpo_state.json に控える（新しく候補に入った機だけ履歴を取る）。
 # ・Space-Track の目安は全カタログの問い合わせが1時間に1回まで＝6時間ごとのワークフローで1回だけ呼ぶ。
 # ・静止軌道は面では絞れない（経度の近さの別判定が要る）ので、今は低軌道（平均高度 2,000km 未満）だけ。
+#   ③ 狙い（距離は見ない）＝噴射の前後で、ある1機の軌道面・位相へ寄せる向きになった機（中身は scripts/rpo_target.py）。
+#      全機の軌道要素の控えは大きいので、履歴を持たない rpostate ブランチの els.json に置く（ワークフローが出し入れ）
 import bisect
 import json
 import os
@@ -17,6 +19,9 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 from sgp4.api import Satrec, SatrecArray, jday
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import rpo_target as RT
 
 BASE = 'https://www.space-track.org'
 OUT = 'data/rpo.json'
@@ -44,8 +49,10 @@ NEW_MD = '_new_rpo.md'   # 新しい組が鳴った時だけ書く＝ワーク�
 # 軌道面が近い衛星（アプリ v3.63）用に、衛星（PAYLOAD）全機の軌道面と TLE を書き出す。約4MB を6時間ごとに main へ積むと
 # 履歴が膨らむので、ワークフローが履歴を持たない planes ブランチへ上書きで置く（main にはコミットしない）
 PLANES = '_planes.json'
+ELS = '_rpo_els.json'      # ③ の全機の軌道要素の控え（rpostate ブランチ・main にはコミットしない）
+SILENT_UNTIL = '2026-11-20T00:00:00Z'   # ③ はこの日まで一覧に出すだけで知らせない（偶然の組の数を本番で数える期間）
 FIELDS ='NORAD_CAT_ID,OBJECT_NAME,OBJECT_ID,OBJECT_TYPE,COUNTRY_CODE,LAUNCH_DATE,EPOCH,SEMIMAJOR_AXIS,' \
-         'PERIAPSIS,APOAPSIS,TLE_LINE1,TLE_LINE2,INCLINATION,RA_OF_ASC_NODE,ECCENTRICITY'
+         'PERIAPSIS,APOAPSIS,TLE_LINE1,TLE_LINE2,INCLINATION,RA_OF_ASC_NODE,ECCENTRICITY,ARG_OF_PERICENTER,MEAN_ANOMALY'
 
 
 def utc(s):
@@ -221,6 +228,9 @@ def info(x):
             'epoch': x['EPOCH'][:19] + 'Z', 'tle1': x['TLE_LINE1'], 'tle2': x['TLE_LINE2']}
 
 
+TMODE = {'plane': '軌道面を寄せる', 'phase': '高度を変えて位相を詰める', 'keep': '同じ軌道面・高度を保つ', 'launch': '打上げ時点で軌道面に合う'}
+
+
 def jst(t):
     """'2026-10-16T14:14:11Z' → '10-16 23:14'（JST）。噴射の時刻は見つけた TLE の元期＝実際はその前の TLE との間のどこか"""
     return (utc(t) + timedelta(hours=9)).strftime('%m-%d %H:%M')
@@ -228,12 +238,18 @@ def jst(t):
 
 def notify(new, now):
     """新しく鳴った組の知らせ文。1行目が Issue の題名"""
-    kinds = {'dwell': '① 警報（張り付き）', 'approach': '② 注意（前触れ）'}
+    kinds = {'dwell': '① 警報（張り付き）', 'approach': '② 注意（前触れ）', 'target': '③ 狙い（軌道面・位相を寄せている）'}
     L = ['キラー衛星の検知：' + '、'.join(f"{o['a']['name']} × {o['b']['name']}" for o in new), '']
     for o in new:
         L.append(f"### {kinds[o['kind']]}　{o['a']['name']}（{o['a']['country']}）× {o['b']['name']}（{o['b']['country']}）")
         if o['kind'] == 'dwell':
             L.append(f"- この先3日のうち {DWELL_KM:.0f}km 以内に {o['hours']} 時間・最小 {o['minKm']}km・今 {o['nowKm']}km")
+        elif o['kind'] == 'target':
+            L.append(f"- {o['a']['name']} が {o['b']['name']} を狙っている可能性（{'・'.join(TMODE.get(m, m) for m in o['modes'])}）")
+            L.append(f"- 軌道面の差 {o['planeDeg']}°" + (f"・{jst(o['meetAt'])} JST ごろ {o['minDeg']}° まで重なる見込み" if o.get('meetAt') else '')
+                     + f"・傾斜角の差 {o['dInc']}°・高度差 {o['dAltKm']}km" + (f"・位相 {o['phaseDeg']}°（{o['phaseDays']}日でそろう）" if o.get('phaseDays') is not None else ''))
+            if o.get('mans'):
+                L.append('- 噴射 ' + '、'.join(jst(m) for m in o['mans']) + ' JST')
         else:
             L.append(f"- 1周平均の距離 {o['sepKm']}km・1日で {o['closeKmPerDay']}km 縮む・面の差 {o['planeDeg']}°・高度差 {o['dAltKm']}km")
         for side in ('A', 'B'):
@@ -378,24 +394,45 @@ def run(G, now, st=None):
     warns = approach(pool, sats, now)
     print(f'② 注意 {len(warns)} 組')
 
+    # ③ 狙い（打上げ直後の機・TBA も含める＝打上げ時点で狙いの軌道面へ入れる機を見るため）
+    tobjs = [x for x in G if x.get('TLE_LINE1') and x.get('TLE_LINE2') and x.get('ARG_OF_PERICENTER') is not None
+             and (float(x['PERIAPSIS']) + float(x['APOAPSIS'])) / 2 < LEO and float(x.get('ECCENTRICITY') or 0) < 0.02
+             and not is_stn(x['OBJECT_NAME'])]
+    tby = {x['NORAD_CAT_ID']: x for x in tobjs}
+    try:
+        els = json.load(open(ELS, encoding='utf-8'))
+    except Exception:
+        els = {}
+    ts = {'els': els, 'targets': state.get('targets', {})}
+    tg = RT.update(tobjs, now.timestamp(), ts)
+    state['targets'] = ts['targets']
+    with open(ELS, 'w', encoding='utf-8') as f:
+        json.dump(els, f, separators=(',', ':'))
+    targets = [{'a': a, 'b': b, **o} for a, b, o in tg]
+    print(f'③ 狙い {len(targets)} 組・控え {len(els) - 1} 機・{os.path.getsize(ELS) // 1024} KB')
+
     # 最初に鳴った時刻を覚える（同じ組が鳴り続けても知らせは1回で済むように）
     seen = state['seen']
     items, new = [], []
-    for kind, arr in (('dwell', alerts), ('approach', warns)):
+    for kind, arr in (('dwell', alerts), ('approach', warns), ('target', targets)):
         for o in arr:
-            ab = tuple(sorted((o['a'], o['b']), key=int))
-            key = kind + ':' + '-'.join(ab)
+            ab = (o['a'], o['b']) if kind == 'target' else tuple(sorted((o['a'], o['b']), key=int))   # ③ は向きがある（狙う側 > 狙われる側）
+            key = kind + ':' + ('>' if kind == 'target' else '-').join(ab)
+            o.pop('_first', None)
             first = seen.get(key, {}).get('first', iso(now))
             seen[key] = {**seen.get(key, {}), 'first': first, 'last': iso(now)}
             a, b = o.pop('a'), o.pop('b')
-            it = {'kind': kind, 'first': first, 'a': info(by[a]), 'b': info(by[b]), **o, '_key': key, '_ab': ab}
+            src = tby if kind == 'target' else by
+            it = {'kind': kind, 'first': first, 'a': info(src[a]), 'b': info(src[b]), **o, '_key': key, '_ab': ab}
+            if kind == 'target' and iso(now) < SILENT_UNTIL:
+                it['silent'] = True   # 知らせない期間（アプリは NEW に数えない）
             if ab in KNOWN:
                 it['known'] = KNOWN[ab]
-            elif first == iso(now):
+            elif first == iso(now) and (kind != 'target' or iso(now) >= SILENT_UNTIL):
                 new.append(it)
             items.append(it)
     # 開始の日時は、まだ出していない組だけ履歴から求める（既知の組は求めない＝ずっと続いている）
-    todo = [it for it in items if 'known' not in it and 'since' not in seen[it['_key']]]
+    todo = [it for it in items if 'known' not in it and it['kind'] != 'target' and 'since' not in seen[it['_key']]]
     if todo and st:
         try:
             got = since_of(list({it['_ab'] for it in todo}), st, now)
@@ -412,7 +449,7 @@ def run(G, now, st=None):
                 it['sinceCapped'] = True
     cut = iso(now - timedelta(days=60))
     state['seen'] = {k: v for k, v in seen.items() if v['last'] >= cut}
-    items.sort(key=lambda o: ('known' in o, o['kind'] != 'dwell', o.get('minKm', o.get('sepKm', 0))))
+    items.sort(key=lambda o: ('known' in o, {'dwell': 0, 'approach': 1, 'target': 2}[o['kind']], o.get('minKm', o.get('sepKm', o.get('planeDeg', 0))) or 0))
     if new:
         notify(new, now)
         print(f'新しく鳴った組 {len(new)}（{NEW_MD}）')

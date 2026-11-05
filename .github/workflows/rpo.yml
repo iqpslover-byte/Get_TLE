@@ -26,6 +26,12 @@ jobs:
       - name: Install dependencies
         run: pip install requests sgp4 numpy
 
+      # ③ 狙いの判定に使う全機の軌道要素の控え（約2〜5MB）は、履歴を持たない rpostate ブランチの els.json に置く。
+      # 無ければ（初回）空から始める＝その回は噴射を拾わず、次の回から前回と比べる
+      - name: Restore element history
+        run: |
+          git fetch -q --depth 1 origin rpostate && git show FETCH_HEAD:els.json > _rpo_els.json || echo "控えなし（初回）"
+
       - name: Detect
         env:
           SPACETRACK_USERNAME: ${{ secrets.SPACETRACK_USERNAME }}
@@ -56,6 +62,20 @@ jobs:
           git add planes.json
           git commit -q -m "Update planes: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
           git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" planes
+
+      - name: Publish element history
+        if: ${{ hashFiles('_rpo_els.json') != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p /tmp/rpostate && cp _rpo_els.json /tmp/rpostate/els.json
+          cd /tmp/rpostate
+          git init -q -b rpostate
+          git config user.email "iqps.lover@gmail.com"
+          git config user.name "iqpslover-byte"
+          git add els.json
+          git commit -q -m "Update element history: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git push -q -f "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" rpostate
 
       # 新しい組が鳴った時だけ Issue を立てる（Get_NOTAM と同じ方式・知らせるのが目的なので立てたらすぐ閉じる）。
       # ★自分で gh から立てた Issue は自分に通知されない＝必ず Actions から立てる。
